@@ -12,7 +12,7 @@ One Python script, stdlib only. Needs `yt-dlp` and `ffmpeg`.
 nix run . -- <url>                 # packaged, deps included
 nix develop                        # or: shell with python3, yt-dlp, ffmpeg; ./video-digest on PATH
 video-digest <url> [--out DIR] [--scene 0.3] [--max-gap 20] [--min-gap 3]
-             [--min-frames 24] [--width 1280] [--dedup 0.01] [--keep-video] [--force]
+             [--min-frames 24] [--width 1280] [--dedup 0.005] [--keep-video] [--force]
 ```
 
 Output goes to `~/video-digests/<slug>/` unless `--out` is given. Re-running skips
@@ -42,11 +42,13 @@ each digest with duration, frame count and whether it has speech.
 3. Gaps longer than `--max-gap` are filled with evenly spaced frames. Short
    videos use a tighter gap (`duration / --min-frames`) so a 2-minute timelapse
    still gets about 24 frames.
-4. Each candidate is compared with the last kept frame as a 64x36 grayscale
-   thumbnail; if under `--dedup` (1%) of pixels changed noticeably it is dropped,
+4. Each candidate is compared with the last kept frame as a 128x72 grayscale
+   thumbnail; if under `--dedup` (0.5%) of pixels changed noticeably it is dropped,
    so a slide held for two minutes yields one frame, not six.
 
-On a 32-minute live-demo talk the defaults give about 110 frames (about 6 MB).
+On the Oskar Stålberg talks (31-55 min) the defaults give 115-194 frames each,
+and 264 for a 49-minute talk edited with a camera cut every ~13 s; about 10 MB
+per talk. Short build timelapses get 12-50 frames.
 
 ## Subtitles
 
@@ -54,7 +56,11 @@ English manual subtitles first, then YouTube's original-language auto captions
 (`en-orig`), then any auto `en` track. json3 is preferred (word-level timing, so
 text is split between frames at the word); vtt is the fallback and its rolling
 duplicate lines are removed. Videos without speech keep their frames, marked
-`(no speech)`, and the header says so.
+`(no speech)`, and the header says so. Music-only videos often get auto-captions
+like `[Music] hey hey`; under 20 words per minute counts as no speech, and frequent
+`[Music]` markers are flagged in the header as possible song lyrics. YouTube
+rate-limits machine-translated tracks (HTTP 429); if one fails the video is
+digested without a transcript and the header says why.
 
 ## Notes
 

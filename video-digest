@@ -20,9 +20,10 @@ from pathlib import Path
 DEFAULT_ROOT = Path.home() / "video-digests"
 SETTLE = 0.5          # seconds after a scene cut to grab the frame (skip crossfades)
 SCAN_FPS = 5          # frame rate used for the scene-score pass
-THUMB_W, THUMB_H = 64, 36   # grayscale thumbnail used for near-duplicate checks
-PIXEL_DELTA = 24      # a thumbnail pixel "changed" if it moved by more than this
+THUMB_W, THUMB_H = 128, 72   # grayscale thumbnail used for near-duplicate checks
+PIXEL_DELTA = 16      # a thumbnail pixel "changed" if it moved by more than this
 JPEG_QSCALE = 5       # ffmpeg mjpeg qscale; ~quality 80-85
+MIN_WPM = 20          # below this many words/minute, captions are ASR noise over music
 NON_SPEECH = re.compile(r"^\[[^\]]*\]$|^\([^)]*\)$|^♪+$")
 
 
@@ -277,7 +278,10 @@ def write_outputs(outdir, info, url, frames, segments, tokens, sub_kind, args):
     hours = duration >= 3600
     chapters = info.get("chapters") or []
     words = word_count(segments)
-    has_speech = words > 0
+    # music-only videos get auto-captions like "[Music] hey hey [Music]"
+    has_speech = words > 0 and words / max(duration / 60, 1) >= MIN_WPM
+    music_marks = sum(1 for _, t in segments if "[Music]" in t)
+    lyrics_hint = has_speech and music_marks >= 0.2 * len(segments)
     texts = assign_text(frames, tokens) if frames else []
 
     date = info.get("upload_date") or ""
@@ -291,9 +295,12 @@ def write_outputs(outdir, info, url, frames, segments, tokens, sub_kind, args):
     L.append(f"- Duration: {fmt_ts(duration, hours)}")
     L.append(f"- Frames: {len(frames)}")
     if has_speech:
-        L.append(f"- Transcript: {words} words ({sub_kind} English subtitles)")
+        L.append(f"- Transcript: {words} words ({sub_kind} English subtitles)"
+                 + ("; frequent [Music] markers, so this may be song lyrics" if lyrics_hint else ""))
     else:
-        why = "subtitles contain no speech" if segments else "no English subtitles"
+        why = (f"captions hold only {words} stray words, likely ASR noise over music" if words else
+               "subtitles contain no speech" if segments else
+               sub_kind if sub_kind.startswith("none (") else "no English subtitles")
         L.append(f"- Transcript: none. **This video has no speech** ({why}); "
                  "frames are marked (no speech).")
     if chapters:
@@ -324,7 +331,7 @@ def write_outputs(outdir, info, url, frames, segments, tokens, sub_kind, args):
         s = int(f["t"])
         L += [f"### [{fmt_ts(s, hours)}](https://youtu.be/{vid}?t={s})", "",
               f"![]({f['file']})", "",
-              text if text and is_speech(text) else "(no speech)", ""]
+              text if has_speech and text and is_speech(text) else "(no speech)", ""]
 
     (outdir / "transcript.txt").write_text(
         "".join(f"[{fmt_ts(t, hours)}] {x}\n" for t, x in segments) if segments else "(no speech)\n",
@@ -367,8 +374,16 @@ def digest_video(url, outdir, args, info=None):
         flag = "--write-subs" if sub_kind == "manual" else "--write-auto-subs"
         for old in outdir.glob("subs.*"):
             old.unlink()
-        ytdlp(["--skip-download", flag, "--sub-langs", lang, "--sub-format", ext,
-               "-o", "subs.%(ext)s", url], cwd=outdir, what="yt-dlp subtitles")
+        try:
+            ytdlp(["--skip-download", flag, "--sub-langs", lang, "--sub-format", ext,
+                   "-o", "subs.%(ext)s", url], cwd=outdir, what="yt-dlp subtitles")
+        except RuntimeError as ex:
+            # YouTube rate-limits machine-translated tracks hard (HTTP 429); they are
+            # a last resort anyway, so carry on without a transcript.
+            if "translated" not in sub_kind:
+                raise
+            log(f"! translated subtitles unavailable, continuing without: {ex}", 1)
+            sub_kind = "none (machine-translated English track failed to download)"
         files = sorted(outdir.glob(f"subs.*.{ext}"))
         if files:
             segments, tokens = (parse_json3 if ext == "json3" else parse_vtt)(files[0])
@@ -433,8 +448,8 @@ def main():
     ap.add_argument("--min-frames", type=int, default=24,
                     help="shrink the max gap on short videos to aim for this many frames (default 24)")
     ap.add_argument("--width", type=int, default=1280, help="frame width in pixels (default 1280)")
-    ap.add_argument("--dedup", type=float, default=0.01,
-                    help="drop a frame if under this fraction of its thumbnail changed (default 0.01)")
+    ap.add_argument("--dedup", type=float, default=0.005,
+                    help="drop a frame if under this fraction of its thumbnail changed (default 0.005)")
     ap.add_argument("--keep-video", action="store_true", help="keep the downloaded video file")
     ap.add_argument("--force", action="store_true", help="redo videos that already have a digest")
     args = ap.parse_args()
