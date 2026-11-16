@@ -117,7 +117,14 @@ def ytdlp(args, **kw):
 
 def choose_subs(info):
     """Return (lang, ext, kind) for the best English track, or None.
-    Manual subs first, then the original-language ASR track, then any auto 'en'."""
+    Site/manual subs first, then original English ASR, then other English ASR.
+    Keep the extractor's language key: TikTok can use ISO-639-3 'eng-US'."""
+    def normalized(lang):
+        return lang.lower().replace("_", "-")
+
+    def english(lang):
+        return normalized(lang).split("-", 1)[0] in ("en", "eng")
+
     def pick_ext(tracks):
         exts = [t.get("ext") for t in tracks]
         for e in ("json3", "vtt", "srt", "json"):
@@ -126,8 +133,8 @@ def choose_subs(info):
         return None
 
     manual = info.get("subtitles") or {}
-    keys = [k for k in manual if k == "en" or k.startswith("en-") or k.startswith("en_")]
-    keys.sort(key=lambda k: (k != "en", k))
+    keys = [k for k in manual if english(k)]
+    keys.sort(key=lambda k: (normalized(k) not in ("en", "eng"), normalized(k) != "en", k))
     for k in keys:
         ext = pick_ext(manual[k])
         if ext:
@@ -135,13 +142,16 @@ def choose_subs(info):
             kind = "site-provided" if extractor.lower().startswith("tiktok") else "manual"
             return k, ext, kind
     auto = info.get("automatic_captions") or {}
-    for k, kind in (("en-orig", "auto"), ("en", "auto")):
-        if k in auto:
-            ext = pick_ext(auto[k])
-            if ext:
-                if k == "en" and any(x.endswith("-orig") and x != "en-orig" for x in auto):
-                    kind = "auto (machine-translated)"
-                return k, ext, kind
+    order = {"en-orig": 0, "eng-orig": 1, "en": 2, "eng": 3}
+    keys = sorted((k for k in auto if english(k)), key=lambda k: (order.get(normalized(k), 4), k))
+    for k in keys:
+        ext = pick_ext(auto[k])
+        if ext:
+            kind = "auto"
+            if normalized(k) in ("en", "eng") and any(
+                    normalized(x).endswith("-orig") and not english(x) for x in auto):
+                kind = "auto (machine-translated)"
+            return k, ext, kind
     return None
 
 

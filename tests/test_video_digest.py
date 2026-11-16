@@ -47,8 +47,8 @@ class PortabilityTests(unittest.TestCase):
 
     def test_tiktok_caption_formats_and_short_speech(self):
         info = {"id": "123", "extractor_key": "TikTok", "duration": 8,
-                "subtitles": {"en-US": [{"ext": "srt"}, {"ext": "json"}]}}
-        self.assertEqual(vd.choose_subs(info), ("en-US", "srt", "site-provided"))
+                "subtitles": {"eng-US": [{"ext": "srt"}, {"ext": "json"}]}}
+        self.assertEqual(vd.choose_subs(info), ("eng-US", "srt", "site-provided"))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             captions = root / "captions.srt"
@@ -73,6 +73,17 @@ class PortabilityTests(unittest.TestCase):
                              [(1, "hello there"), (4, "hello there")])
             self.assertEqual(vd.parse_subtitles(captions, "vtt", rolling_vtt=True)[0],
                              [(1, "hello there")])
+
+    def test_english_language_codes_and_original_auto_preference(self):
+        for lang in ("en", "eng", "en-US", "eng-US", "ENG_us"):
+            for field, kind in (("subtitles", "manual"), ("automatic_captions", "auto")):
+                with self.subTest(lang=lang, field=field):
+                    self.assertEqual(vd.choose_subs({field: {lang: [{"ext": "vtt"}]}}),
+                                     (lang, "vtt", kind))
+        info = {"automatic_captions": {"en": [{"ext": "vtt"}], "en-orig": [{"ext": "json3"}],
+                                       "eng-US": [{"ext": "srt"}]}}
+        self.assertEqual(vd.choose_subs(info), ("en-orig", "json3", "auto"))
+        self.assertIsNone(vd.choose_subs({"subtitles": {"de": [{"ext": "vtt"}]}}))
 
     def test_subprocess_preserves_interpreter_environment(self):
         prefix = vd.run([sys.executable, "-c", "import sys; print(sys.prefix)"]).strip()
@@ -240,9 +251,10 @@ if "-J" in a:
         "extractor_key": "TikTok", "webpage_url": canonical, "duration": 8,
         "formats": [{}], "uploader": "fixture", "upload_date": "20260101",
         "chapters": [{"start_time": 0, "title": "Demo"}],
-        "subtitles": {"en-US": [{"ext": ext}]} if ext != "none" else {}}))
+        "subtitles": {"eng-US": [{"ext": ext}]} if ext != "none" else {}}))
 elif "--skip-download" in a:
     assert "--write-subs" in a
+    assert a[a.index("--sub-langs") + 1] == "eng-US"
     if ext == "srt":
         data = "1\\n00:00:01,000 --> 00:00:03,000\\nhello there\\n\\n2\\n00:00:04,000 --> 00:00:07,000\\nhello there\\n"
     elif ext == "json":
@@ -250,7 +262,7 @@ elif "--skip-download" in a:
                                          {"start_time": 4000, "text": "hello there"}]})
     elif ext == "vtt":
         data = "WEBVTT\\n\\n00:01.000 --> 00:03.000\\nhello there\\n\\n00:04.000 --> 00:07.000\\nhello there\\n"
-    pathlib.Path("subs.en-US." + ext).write_text(data, encoding="utf-8")
+    pathlib.Path("subs.eng-US." + ext).write_text(data, encoding="utf-8")
 else:
     assert a[-1] == canonical
     shutil.copyfile(os.environ["VIDEO_DIGEST_FIXTURE"], "video.mkv")

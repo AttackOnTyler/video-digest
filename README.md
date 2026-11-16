@@ -128,7 +128,8 @@ TikTok links open the source clip and **do not guarantee seeking**. Cite the
 explicit timecode and frame file when using the skill.
 
 English VTT, SRT, and TikTok JSON captions with timed `utterances` are supported
-when yt-dlp exposes them. Captions exposed in TikTok's subtitle list are labelled
+when yt-dlp exposes them, including `en`/`eng` language codes and regional forms
+such as TikTok's `eng-US`. Captions exposed in TikTok's subtitle list are labelled
 "site-provided" because that list does not reliably distinguish manual from
 automatic captions. A short spoken clip can have fewer than 20 words total and
 still qualify as speech: the heuristic measures words per minute using the clip's
