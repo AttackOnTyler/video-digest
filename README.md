@@ -1,7 +1,7 @@
 # video-digest
 
-Turn a YouTube video or playlist into Markdown pairing screenshots with the
-aligned transcript. The included **video-digest skill** helps an assistant turn
+Turn a YouTube video/playlist or TikTok video into Markdown pairing screenshots
+with the aligned transcript. The included **video-digest skill** helps an assistant turn
 that evidence into timestamped takeaways and visual observations. It works in an
 ordinary folder, with no repository or issue tracker required.
 
@@ -15,7 +15,8 @@ not call a model or require an API key.
 Use **Python 3.10 or newer**, including `pip` and `venv`. Install the **FFmpeg
 executables** (`ffmpeg` and `ffprobe`), not a similarly named Python package.
 Install **Deno** for YouTube's JavaScript challenges. The pip commands below
-install `yt-dlp[default]`, including its challenge solver. See the upstream
+install `yt-dlp[default,curl-cffi]`, including its YouTube challenge solver and
+HTTP impersonation support for TikTok. See the upstream
 [yt-dlp dependencies](https://github.com/yt-dlp/yt-dlp#dependencies),
 [FFmpeg downloads](https://ffmpeg.org/download.html), and
 [Deno installation guide](https://docs.deno.com/runtime/getting_started/installation/).
@@ -66,7 +67,7 @@ FFmpeg. Verify `python3 --version`, `ffmpeg -version`, `ffprobe -version`, and
 
 ## Quick start from the shared ZIP
 
-Extract `video-digest-0.1.0.zip`; it contains a `video-digest` folder with this
+Extract `video-digest-0.2.0.zip`; it contains a `video-digest` folder with this
 README, the tool, skill, template, and validation scripts. No Git or Nix needed.
 Commands below start in the directory **containing** that extracted folder.
 Quote URLs, especially playlist URLs containing `&`.
@@ -76,7 +77,7 @@ Windows / PowerShell (no activation script or execution-policy change needed):
 ```powershell
 py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install ".\video-digest[youtube]"
+.\.venv\Scripts\python.exe -m pip install ".\video-digest[download]"
 $env:PATH = "$(Resolve-Path .\.venv\Scripts);$env:PATH"
 video-digest --help
 yt-dlp --version
@@ -89,21 +90,57 @@ macOS / Linux:
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install "./video-digest[youtube]"
+python -m pip install "./video-digest[download]"
 video-digest --help
 yt-dlp --version
 video-digest "https://www.youtube.com/watch?v=VIDEO_ID" --out "./my digest"
 ```
 
-Replace `VIDEO_ID` with the real video ID, or pass a playlist URL. Keep the
+Replace `VIDEO_ID` with the real video ID, or pass a YouTube playlist URL. Keep the
 virtual environment on PATH when running the tool, including from an assistant.
 In a later terminal, repeat the PowerShell PATH line or the Unix activation line.
 An assistant started before this setup may need restarting to inherit PATH.
 
-From a source checkout, install with `python -m pip install ".[youtube]"` instead.
-If you already manage `yt-dlp` separately, omit `[youtube]`. You can also run
+From a source checkout, install with `python -m pip install ".[download]"` instead.
+The original `[youtube]` extra remains supported. For TikTok, prefer `[download]`
+so yt-dlp has its optional HTTP impersonation dependency. If you already manage
+`yt-dlp` separately, omit `[download]`. You can also run
 `python video_digest.py "<url>"` without installing the tool, with prerequisites
 on PATH. `python -m video_digest` is available after installation.
+
+## TikTok videos
+
+Use the same CLI with an individual video URL or its short share link:
+
+```sh
+video-digest "https://www.tiktok.com/@CREATOR/video/VIDEO_ID" --out "./my tiktok digest"
+video-digest "https://vm.tiktok.com/SHARE_CODE/" --out "./my tiktok digest"
+```
+
+`vt.tiktok.com` and `www.tiktok.com/t/` share links are also resolved by yt-dlp.
+Replace the placeholders with a real link. These commands also work in
+PowerShell after the PATH setup above. Vertical frames retain their aspect
+ratio. For fast cuts, try `--min-gap 1 --max-gap 3` for denser sampling.
+
+The digest retains the TikTok page URL, creator, date, duration, timecodes, and
+local frame references. YouTube timestamps still link directly to that moment;
+TikTok links open the source clip and **do not guarantee seeking**. Cite the
+explicit timecode and frame file when using the skill.
+
+English VTT, SRT, and TikTok JSON captions with timed `utterances` are supported
+when yt-dlp exposes them. Captions exposed in TikTok's subtitle list are labelled
+"site-provided" because that list does not reliably distinguish manual from
+automatic captions. A short spoken clip can have fewer than 20 words total and
+still qualify as speech: the heuristic measures words per minute using the clip's
+actual duration. If no usable English captions are available, the result is
+frames-only. Burned-in text can be read by an image-capable assistant, but this
+tool does not OCR images, transcribe audio, or treat the post description/music
+metadata as a transcript. Missing captions do not mean a silent video.
+
+Support targets individual video posts; photo carousels, live streams, and bulk
+profile/collection downloads are not validated. Access remains subject to what
+yt-dlp can retrieve in your region/session. See the
+[upstream TikTok extractor](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/tiktok.py).
 
 ## Use or install the skill
 
@@ -157,8 +194,10 @@ listed in the index; other videos continue and the command exits with status 1.
 Reruns skip videos with a completed `digest.md`; `--force` regenerates them.
 A failed forced rerun removes the old completion marker so the next run retries.
 Existing `notes.md` files are not changed by the tool; refresh outdated notes
-with your assistant. Downloads are video-only at <=720p and deleted after
-success unless `--keep-video` is set. Incomplete downloads may remain for retry.
+with your assistant. Downloads prefer video-only formats at <=720 pixels high,
+falling back to an available combined format when necessary; only video frames
+are used. Downloads are deleted after success unless `--keep-video` is set.
+Incomplete downloads may remain for retry.
 
 ### How frames and captions are selected
 
@@ -171,11 +210,13 @@ Defaults yield roughly 100–300 frames for many talks. Lower `--dedup` or use
 `--dedup 0` to retain more gradual changes. This is sampling, not every frame.
 
 English manual captions take precedence over original English auto captions,
-then other auto English tracks. json3 word timing is preferred; VTT is a fallback
-with rolling duplicates removed. No transcription service is used. Fewer than
+then other auto English tracks. json3 word timing is preferred; VTT, SRT, and
+TikTok JSON are fallbacks. Rolling VTT duplicates are removed; repeated SRT
+cues are preserved. No transcription service is used. Fewer than
 20 caption words/minute is classified as no speech; frequent `[Music]` markers
-flag possible lyrics. The header's “no speech” is a heuristic and may actually
-mean no usable English captions. The skill keeps that distinction in its notes.
+flag possible lyrics. The header says when no usable English speech captions
+were found; this is a heuristic, not a determination that the video is silent.
+The skill keeps that distinction in its notes.
 
 ## Nix workflow (retained)
 
@@ -195,14 +236,14 @@ libraries from breaking Nix's FFmpeg. No Nix is needed for the pip workflow.
 With the environment on PATH, update the downloader independently:
 
 ```sh
-python -m pip install --upgrade "yt-dlp[default]"
+python -m pip install --upgrade "yt-dlp[default,curl-cffi]"
 ```
 
 PowerShell can use `.\.venv\Scripts\python.exe` instead of `python`.
 For tool/skill updates, extract a newer bundle and repeat the local pip install
 with `--upgrade --force-reinstall`; recopy the skill folder after preserving any
 local edits. Existing digests stay cached unless you pass `--force`. In a Git
-checkout, `git pull` followed by reinstalling `".[youtube]"` updates the tool;
+checkout, `git pull` followed by reinstalling `".[download]"` updates the tool;
 Nix uses the checked-in lock until you explicitly update it. Update FFmpeg/Deno
 through the same method used to install them.
 
@@ -216,10 +257,16 @@ through the same method used to install them.
   set PATH; no activation policy change is needed.
 - **No `venv` or `ensurepip`:** install your distribution's `python3-venv`
   package, or use an official Python installation with pip support.
-- **403 / signature challenge / no formats:** update `yt-dlp[default]` and Deno.
-  YouTube changes frequently. An account-restricted or private video may need
+- **403 / signature challenge / no formats:** update `yt-dlp[default,curl-cffi]` and Deno.
+  Sites change frequently. An account-restricted or private video may need
   user-managed authentication through yt-dlp's own configuration; the bundle
   includes no credentials and does not automate sign-in.
+- **TikTok challenge / login / region restriction:** update `yt-dlp[default,curl-cffi]`
+  and verify `yt-dlp --list-impersonate-targets` lists supported targets. If a link
+  still fails, try the canonical `@creator/video/ID` URL instead of the share link.
+  TikTok may require a permitted session or may restrict access by region; use
+  yt-dlp's own configuration for user-managed authentication. The tool does not
+  bypass access controls or automate sign-in.
 - **429 / caption download failed:** wait and retry the affected video once
   with `--force`. A failed machine-translated track allows a frames-only digest;
   failures of other caption tracks are reported as failures. Check the header
@@ -229,7 +276,7 @@ through the same method used to install them.
 - **Path too long / access denied:** use a short writable folder with `--out`
   and close viewers locking output files before a forced rerun on Windows.
 - **Sparse or blurry frames:** try `--dedup 0`, a smaller `--max-gap`, or a larger
-  `--width`. Greater width cannot recover detail absent from the <=720p download.
+  `--width`. Greater width cannot recover detail absent from the downloaded video.
 
 ## Build a bundle and validate
 
@@ -237,27 +284,31 @@ From the project folder (PowerShell: use `py` in place of `python` if needed):
 
 ```sh
 python scripts/bundle.py
-python scripts/check_install.py dist/video-digest-0.1.0.zip
+python scripts/check_install.py dist/video-digest-0.2.0.zip
 ```
 
-Share `dist/video-digest-0.1.0.zip` and its `.zip.sha256` checksum. The builder
+Share `dist/video-digest-0.2.0.zip` and its `.zip.sha256` checksum. The builder
 uses an explicit file list plus skill, test, and workflow files; it excludes
 Git history, environments, caches, local output, and installed personal skills.
 ZIP ordering, timestamps, permissions, and text line endings are normalized.
 It includes source rather than Python/FFmpeg binaries, so recipients still need
-the prerequisites and Internet access for installation and YouTube downloads.
+the prerequisites and Internet access for installation and video downloads.
 Nothing is published to a package registry.
 
 The validator extracts into a temporary folder with spaces, builds a wheel,
 installs it non-editably into a fresh environment, checks CLI/module entry points
 and installed skill resources, and runs the offline tests from outside the
 source tree. Building may fetch setuptools from PyPI; the wheel install and
-media tests use no network. FFmpeg is required for this validation. Tests use
+media tests use no network. Add `--with-downloader` to also install the `[download]`
+extra from PyPI and verify yt-dlp and curl-cffi in that same fresh environment.
+FFmpeg and ffprobe are required for this validation. Tests use
 synthetic video with real FFmpeg and an external mock downloader, covering
-Unicode/relative paths, subtitles, video/playlist output, skip/force caching,
+Unicode/relative paths, TikTok canonical/share URLs and vertical frames,
+SRT/VTT/JSON captions, YouTube video/playlist output, skip/force caching,
 partial failures, and Windows-safe filenames. For a quick source test:
 `python -m unittest discover -s tests -v` (media tests skip if FFmpeg is missing).
 
-GitHub Actions runs the clean-install checks on Linux, macOS, and Windows with
-Python 3.10 and 3.14. Configuring this matrix alone is not proof those OSes passed;
-consult the actual run. No live YouTube network test is part of these checks.
+GitHub Actions runs the clean-install checks, including `--with-downloader`, on
+Linux, macOS, and Windows with Python 3.10 and 3.14.
+Configuring this matrix alone is not proof those OSes passed;
+consult the actual run. No live network test is part of these checks.

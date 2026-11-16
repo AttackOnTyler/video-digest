@@ -30,11 +30,11 @@ jobs:
       - name: Build the shareable bundle
         run: python scripts/bundle.py
       - name: Validate clean install and offline video/playlist behavior
-        run: python scripts/check_install.py dist/video-digest-0.1.0.zip
+        run: python scripts/check_install.py dist/video-digest-0.2.0.zip --with-downloader
       - uses: actions/upload-artifact@v4
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.14'
         with:
           name: video-digest-bundle
           path: |
-            dist/video-digest-0.1.0.zip
-            dist/video-digest-0.1.0.zip.sha256
+            dist/video-digest-0.2.0.zip
+            dist/video-digest-0.2.0.zip.sha256

@@ -1,6 +1,6 @@
 ---
 name: video-digest
-description: Turn YouTube videos or playlists into evidence-grounded notes and takeaways with timestamp links and visual observations. Use when the user wants to understand or summarize a video, including silent demos and timelapses.
+description: Turn YouTube videos/playlists or TikTok videos into evidence-grounded notes and takeaways with timecodes and visual observations. Use when the user wants to understand or summarize a video, including silent demos and timelapses.
 ---
 
 Use the installed `video-digest` tool to collect evidence, then read it and write
@@ -21,6 +21,14 @@ Without `--out`, output is under the user's home directory in
 `digest.md`, `transcript.txt`, `meta.json`, and `frames/`; a playlist also produces
 `index.md` linking the numbered video folders. Long videos can take minutes;
 wait for the process to finish using the available execution tools.
+
+TikTok video URLs and short share links use the same command. TikTok timecodes
+are offsets within the clip; links open the source video without a guaranteed
+seek position. Cite those offsets and the local frame filenames instead of
+inventing YouTube or TikTok seek URLs. Captions may be absent or only burned
+into the images; the tool does not transcribe audio or OCR text. Inspect visible
+text as visual evidence, and report missing spoken evidence rather than treating
+the description, music title, or a frames-only digest as a speech transcript.
 
 Reruns reuse completed digests; use `--force` only when regeneration is needed.
 If `notes.md` already exists, inspect and reuse it when it covers the user's
@@ -47,8 +55,9 @@ shape. Keep only sections that help this request:
   and timestamp. In silent videos, derive observations from the frames without
   inventing narration, hidden steps, or causal explanations.
 - Flag uncertainties and sampling gaps. Missing or sparse English captions do
-  not establish that the video is actually silent, even if the digest header
-  says "no speech". Frequent music markers may indicate lyrics rather than speech.
+  not establish that the video is actually silent. Frame sections marked
+  "no speech" mean no usable captions in that interval. Frequent music markers
+  may indicate lyrics rather than speech.
 - If images cannot be inspected, say that visual review is incomplete and limit
   the notes to evidence you could read. Do not claim to have watched the video.
 

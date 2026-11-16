@@ -10,14 +10,17 @@ Reviewed: <date> · <full digest or timestamp ranges reviewed>
 
 ## Takeaways
 
-- [mm:ss](https://youtu.be/VIDEO_ID?t=SECONDS) — <Speaker claims/explains/demonstrates…>
+- mm:ss · [source](<SOURCE_URL>) — <Speaker claims/explains/demonstrates…>
   Evidence: <short paraphrase of the transcript or visible result>.
   Interpretation: <your inference, only if useful and clearly identified>.
 
 ## Visual observations
 
-- [mm:ss](https://youtu.be/VIDEO_ID?t=SECONDS), [frame 0001](./frames/0001.jpg) —
+- mm:ss · [source](<SOURCE_URL>), [frame 0001](./frames/0001.jpg) —
   <What is visibly on screen; distinguish observation from inferred process.>
+
+<For YouTube, use the digest's timestamp URL. For TikTok, keep the explicit
+timecode and source URL; it does not guarantee seeking to that position.>
 
 ## Limits and open questions
 

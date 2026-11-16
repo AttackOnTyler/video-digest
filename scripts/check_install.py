@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Validate a source ZIP through a wheel and a fresh, non-editable install.
 
-Requires Python with venv/ensurepip, and FFmpeg on PATH for the media smoke test.
+Requires Python with venv/ensurepip, and FFmpeg/ffprobe on PATH for the media smoke test.
 Build dependencies are fetched by pip; installing the resulting wheel and all
 media tests are offline. No YouTube request is made.
 """
@@ -15,7 +15,7 @@ import venv
 import zipfile
 
 
-def check(archive):
+def check(archive, with_downloader=False):
     archive = archive.resolve()
     with tempfile.TemporaryDirectory(prefix="video digest install ") as directory:
         root = Path(directory)
@@ -49,6 +49,11 @@ def check(archive):
         assert (skill / "references" / "notes-template.md").is_file(), "Wheel missing notes template"
         run(cli, "--help")
         run(python, "-m", "video_digest", "--help")
+        if with_downloader:
+            # Exercise the friend-facing optional dependencies on each CI OS.
+            run(python, "-m", "pip", "install", str(wheel) + "[download]")
+            run(python, "-c", "import curl_cffi, yt_dlp; print('Downloader dependencies import successfully')")
+            run(binaries / ("yt-dlp.exe" if os.name == "nt" else "yt-dlp"), "--version")
         # Discover tests by absolute path, with cwd outside the source tree.
         run(python, "-m", "unittest", "discover", "-s", source / "tests", "-v")
         print("Clean wheel install, bundled skill, and offline media checks passed.")
@@ -57,4 +62,7 @@ def check(archive):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archive", type=Path)
-    check(parser.parse_args().archive)
+    parser.add_argument("--with-downloader", action="store_true",
+                        help="also fetch/install the download extra and verify its imports and CLI")
+    args = parser.parse_args()
+    check(args.archive, args.with_downloader)
