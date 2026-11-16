@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "video-digest"
+version = "0.1.0"
+description = "YouTube video and playlist frames paired with timestamp-aligned transcripts"
+readme = "README.md"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+youtube = ["yt-dlp[default]>=2025.11.12"]
+
+[project.scripts]
+video-digest = "video_digest:main"
+
+[tool.setuptools]
+py-modules = ["video_digest"]
+
+[tool.setuptools.data-files]
+"share/video-digest/skills/video-digest" = ["skills/video-digest/SKILL.md"]
+"share/video-digest/skills/video-digest/references" = ["skills/video-digest/references/notes-template.md"]

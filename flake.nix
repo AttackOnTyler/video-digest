@@ -13,17 +13,17 @@
       packages = forAll (pkgs: {
         default = pkgs.writeShellApplication {
           name = "video-digest";
-          runtimeInputs = [ pkgs.python3 pkgs.yt-dlp pkgs.ffmpeg ];
+          runtimeInputs = [ pkgs.python3 pkgs.yt-dlp pkgs.ffmpeg pkgs.deno ];
           text = ''
             unset LD_LIBRARY_PATH
-            exec python3 ${./video-digest} "$@"
+            exec python3 ${./video_digest.py} "$@"
           '';
         };
       });
 
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
-          packages = [ pkgs.python3 pkgs.yt-dlp pkgs.ffmpeg ];
+          packages = [ pkgs.python3 pkgs.yt-dlp pkgs.ffmpeg pkgs.deno ];
           shellHook = ''
             unset LD_LIBRARY_PATH
             export PATH="$PWD:$PATH"

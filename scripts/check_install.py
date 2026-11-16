@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""Validate a source ZIP through a wheel and a fresh, non-editable install.
+
+Requires Python with venv/ensurepip, and FFmpeg on PATH for the media smoke test.
+Build dependencies are fetched by pip; installing the resulting wheel and all
+media tests are offline. No YouTube request is made.
+"""
+import argparse
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import venv
+import zipfile
+
+
+def check(archive):
+    archive = archive.resolve()
+    with tempfile.TemporaryDirectory(prefix="video digest install ") as directory:
+        root = Path(directory)
+        with zipfile.ZipFile(archive) as source:
+            source.extractall(root)
+        source = root / "video-digest"
+        environment = root / "clean env"
+        venv.EnvBuilder(with_pip=True).create(environment)
+        binaries = environment / ("Scripts" if os.name == "nt" else "bin")
+        python = binaries / ("python.exe" if os.name == "nt" else "python")
+        cli = binaries / ("video-digest.exe" if os.name == "nt" else "video-digest")
+        env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
+        env["PYTHONUTF8"] = "1"
+        env["PATH"] = str(binaries) + os.pathsep + env.get("PATH", "")
+        env["VIDEO_DIGEST_REQUIRE_FFMPEG"] = "1"
+
+        def run(*command):
+            subprocess.run([str(item) for item in command], cwd=root, env=env, check=True)
+
+        wheels = root / "wheels"
+        run(python, "-m", "pip", "wheel", "--no-deps", "--wheel-dir", wheels, source)
+        wheel, = wheels.glob("*.whl")
+        run(python, "-m", "pip", "install", "--no-index", "--no-deps", wheel)
+        # Confirm the import cannot be satisfied from the checkout/extracted source.
+        run(python, "-c", "import pathlib, sys, video_digest; "
+            "assert pathlib.Path(video_digest.__file__).is_relative_to(pathlib.Path(sys.prefix)); "
+            "print('Installed module:', video_digest.__file__)")
+        skill = environment / "share" / "video-digest" / "skills" / "video-digest"
+        assert (skill / "SKILL.md").is_file(), "Wheel missing the skill"
+        assert (skill / "references" / "notes-template.md").is_file(), "Wheel missing notes template"
+        run(cli, "--help")
+        run(python, "-m", "video_digest", "--help")
+        # Discover tests by absolute path, with cwd outside the source tree.
+        run(python, "-m", "unittest", "discover", "-s", source / "tests", "-v")
+        print("Clean wheel install, bundled skill, and offline media checks passed.")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("archive", type=Path)
+    check(parser.parse_args().archive)
