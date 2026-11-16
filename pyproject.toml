@@ -4,12 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "video-digest"
-version = "0.1.0"
-description = "YouTube video and playlist frames paired with timestamp-aligned transcripts"
+version = "0.2.0"
+description = "YouTube and TikTok frames paired with timestamp-aligned transcripts"
 readme = "README.md"
 requires-python = ">=3.10"
 
 [project.optional-dependencies]
+download = ["yt-dlp[default,curl-cffi]>=2025.11.12"]
+# Retained for installations using the original extra name.
 youtube = ["yt-dlp[default]>=2025.11.12"]
 
 [project.scripts]

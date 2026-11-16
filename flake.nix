@@ -1,5 +1,5 @@
 {
-  description = "video-digest: YouTube video/playlist -> Markdown of frames + transcript";
+  description = "video-digest: YouTube and TikTok -> Markdown of frames + transcript";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 

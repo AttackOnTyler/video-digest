@@ -25,6 +25,66 @@ def working_directory(directory):
 
 
 class PortabilityTests(unittest.TestCase):
+    def test_source_and_timestamp_urls(self):
+        tiktok = "https://www.tiktok.com/@fixture/video/1234567890123456789"
+        self.assertEqual(vd.source_url({"id": "1234567890123456789", "extractor_key": "TikTok",
+                                       "webpage_url": tiktok}, "https://vm.tiktok.com/share/"), tiktok)
+        self.assertEqual(vd.source_url({"id": "123", "extractor_key": "TikTok"}, tiktok), tiktok)
+        for url in ("https://youtu.be/example", "https://www.youtube.com/watch?v=example&list=playlist",
+                    "https://www.youtube.com/shorts/example"):
+            with self.subTest(url=url):
+                self.assertEqual(vd.source_url({"id": "example"}, url),
+                                 "https://www.youtube.com/watch?v=example")
+                self.assertEqual(vd.timestamp_url(url, 12.5), "https://youtu.be/example?t=12")
+        self.assertEqual(vd.timestamp_url(tiktok, 12), tiktok)
+        self.assertEqual(vd.timestamp_url("https://notyoutube.com/watch?v=example", 12),
+                         "https://notyoutube.com/watch?v=example")
+        self.assertEqual(vd.playlist_entry_url({"id": "123", "url": tiktok}, {}), tiktok)
+        self.assertEqual(vd.playlist_entry_url({"id": "example"}, {"extractor_key": "YoutubeTab"}),
+                         "https://www.youtube.com/watch?v=example")
+        with self.assertRaisesRegex(ValueError, "no video page URL"):
+            vd.playlist_entry_url({"id": "123"}, {"extractor_key": "TikTokUser"})
+
+    def test_tiktok_caption_formats_and_short_speech(self):
+        info = {"id": "123", "extractor_key": "TikTok", "duration": 8,
+                "subtitles": {"eng-US": [{"ext": "srt"}, {"ext": "json"}]}}
+        self.assertEqual(vd.choose_subs(info), ("eng-US", "srt", "site-provided"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            captions = root / "captions.srt"
+            captions.write_text("1\n00:00:01,000 --> 00:00:03,000\nhello there\n\n"
+                                "2\n00:00:04,000 --> 00:00:07,000\nhello there\n", encoding="utf-8")
+            segments, tokens = vd.parse_subtitles(captions, "srt")
+            self.assertEqual(segments, [(1, "hello there"), (4, "hello there")])
+            args = vd.argparse.Namespace(scene=.3, max_gap=20, min_gap=3, min_frames=24, width=1280, dedup=.005)
+            meta = vd.write_outputs(root, info, "https://www.tiktok.com/@fixture/video/123",
+                                    [], segments, tokens, "site-provided", args)
+            self.assertTrue(meta["transcript"]["has_speech"])  # Four words / eight seconds = 30 WPM.
+            captions = root / "captions.json"
+            captions.write_text(json.dumps({"utterances": [{"start_time": 3000, "text": "later"},
+                {"start_time": 500, "text": "first\nwords"}, {"text": "untimed"}]}), encoding="utf-8")
+            self.assertEqual(vd.parse_subtitles(captions, "json")[0], [(0.5, "first words"), (3, "later")])
+            captions.write_text(json.dumps({"description": "untimed post text"}), encoding="utf-8")
+            self.assertEqual(vd.parse_subtitles(captions, "json"), ([], []))
+            captions = root / "captions.vtt"
+            captions.write_text("WEBVTT\n\n00:01.000 --> 00:03.000\nhello there\n\n"
+                                "00:04.000 --> 00:07.000\nhello there\n", encoding="utf-8")
+            self.assertEqual(vd.parse_subtitles(captions, "vtt")[0],
+                             [(1, "hello there"), (4, "hello there")])
+            self.assertEqual(vd.parse_subtitles(captions, "vtt", rolling_vtt=True)[0],
+                             [(1, "hello there")])
+
+    def test_english_language_codes_and_original_auto_preference(self):
+        for lang in ("en", "eng", "en-US", "eng-US", "ENG_us"):
+            for field, kind in (("subtitles", "manual"), ("automatic_captions", "auto")):
+                with self.subTest(lang=lang, field=field):
+                    self.assertEqual(vd.choose_subs({field: {lang: [{"ext": "vtt"}]}}),
+                                     (lang, "vtt", kind))
+        info = {"automatic_captions": {"en": [{"ext": "vtt"}], "en-orig": [{"ext": "json3"}],
+                                       "eng-US": [{"ext": "srt"}]}}
+        self.assertEqual(vd.choose_subs(info), ("en-orig", "json3", "auto"))
+        self.assertIsNone(vd.choose_subs({"subtitles": {"de": [{"ext": "vtt"}]}}))
+
     def test_subprocess_preserves_interpreter_environment(self):
         prefix = vd.run([sys.executable, "-c", "import sys; print(sys.prefix)"]).strip()
         self.assertEqual(Path(prefix), Path(sys.prefix))
@@ -135,10 +195,11 @@ class MediaTests(unittest.TestCase):
     """Real FFmpeg with a deterministic external downloader fixture, no network."""
     @classmethod
     def setUpClass(cls):
-        if not shutil.which("ffmpeg"):
-            if os.environ.get("VIDEO_DIGEST_REQUIRE_FFMPEG"):
-                raise RuntimeError("FFmpeg is required for the clean-install/CI media tests")
-            raise unittest.SkipTest("ffmpeg not on PATH; media smoke tests skipped")
+        for tool in ("ffmpeg", "ffprobe"):
+            if not shutil.which(tool):
+                if os.environ.get("VIDEO_DIGEST_REQUIRE_FFMPEG"):
+                    raise RuntimeError(f"{tool} is required for the clean-install/CI media tests")
+                raise unittest.SkipTest(f"{tool} not on PATH; media smoke tests skipped")
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="video digest é ")
@@ -159,12 +220,13 @@ if vid == "bad":
     sys.stderr.write("fixture unavailable")
     sys.exit(1)
 info = {"id": vid, "title": "Café 演示 " + vid, "duration": 8,
+        "extractor_key": "Youtube", "webpage_url": "https://www.youtube.com/watch?v=" + vid,
         "formats": [{}], "channel": "Fixture", "upload_date": "20260101",
         "chapters": [{"start_time": 0, "title": "Demo"}],
         "subtitles": {"en": [{"ext": "json3"}]} if vid == "speech" else {}}
 if "-J" in a:
     if "playlist" in url:
-        info = {"_type": "playlist", "id": "list", "title": "Playlist café",
+        info = {"_type": "playlist", "id": "list", "title": "Playlist café", "extractor_key": "YoutubeTab",
                 "entries": [{"id": key, "title": "Café 演示 " + key} for key in
                             (["speech", "bad", "silent"] if "failure" in url else ["speech", "silent"])]}
     print(json.dumps(info, ensure_ascii=False))
@@ -173,6 +235,36 @@ elif "--skip-download" in a:
         {"tStartMs": 1000, "segs": [{"utf8": "café " + "a useful spoken word " * 10}]},
         {"tStartMs": 5000, "segs": [{"utf8": "later spoken evidence"}]}]}), encoding="utf-8")
 else:
+    shutil.copyfile(os.environ["VIDEO_DIGEST_FIXTURE"], "video.mkv")
+''', encoding="utf-8")
+
+    def tiktok_downloader(self):
+        """Only TikTok URLs are accepted, catching platform rewrites at every call."""
+        self.downloader.write_text('''import json, os, pathlib, shutil, sys
+sys.stdout.reconfigure(encoding="utf-8")
+a = sys.argv[1:]
+assert "tiktok.com/" in a[-1], "TikTok was rewritten to another platform"
+ext = os.environ["VIDEO_DIGEST_CAPTION_EXT"]
+canonical = "https://www.tiktok.com/@fixture/video/1234567890123456789"
+if "-J" in a:
+    print(json.dumps({"id": "1234567890123456789", "title": "Vertical demo café",
+        "extractor_key": "TikTok", "webpage_url": canonical, "duration": 8,
+        "formats": [{}], "uploader": "fixture", "upload_date": "20260101",
+        "chapters": [{"start_time": 0, "title": "Demo"}],
+        "subtitles": {"eng-US": [{"ext": ext}]} if ext != "none" else {}}))
+elif "--skip-download" in a:
+    assert "--write-subs" in a
+    assert a[a.index("--sub-langs") + 1] == "eng-US"
+    if ext == "srt":
+        data = "1\\n00:00:01,000 --> 00:00:03,000\\nhello there\\n\\n2\\n00:00:04,000 --> 00:00:07,000\\nhello there\\n"
+    elif ext == "json":
+        data = json.dumps({"utterances": [{"start_time": 1000, "text": "hello there"},
+                                         {"start_time": 4000, "text": "hello there"}]})
+    elif ext == "vtt":
+        data = "WEBVTT\\n\\n00:01.000 --> 00:03.000\\nhello there\\n\\n00:04.000 --> 00:07.000\\nhello there\\n"
+    pathlib.Path("subs.eng-US." + ext).write_text(data, encoding="utf-8")
+else:
+    assert a[-1] == canonical
     shutil.copyfile(os.environ["VIDEO_DIGEST_FIXTURE"], "video.mkv")
 ''', encoding="utf-8")
 
@@ -239,6 +331,39 @@ else:
             with self.assertRaisesRegex(RuntimeError, "scan failed"):
                 self.invoke("https://example.test/speech", "--out", "forced", "--force")
         self.assertFalse((self.root / "forced" / "digest.md").exists())
+
+    def test_tiktok_vertical_video_share_links_captions_and_cache(self):
+        vd.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
+                "-i", "testsrc2=size=90x160:rate=5:duration=8", "-c:v", "ffv1", str(self.video)])
+        canonical = "https://www.tiktok.com/@fixture/video/1234567890123456789"
+        for ext, url in (("srt", canonical), ("json", "https://vm.tiktok.com/share/"),
+                         ("vtt", "https://vt.tiktok.com/share/"), ("none", "https://www.tiktok.com/t/share/")):
+            with self.subTest(ext=ext), patch.dict(os.environ, {"VIDEO_DIGEST_CAPTION_EXT": ext}):
+                self.tiktok_downloader()
+                self.invoke(url, "--out", ext + " output")
+                output = self.root / (ext + " output")
+                meta = json.loads((output / "meta.json").read_text(encoding="utf-8"))
+                self.assertEqual(meta["url"], canonical)
+                self.assertEqual(meta["transcript"]["has_speech"], ext != "none")
+                self.assertGreater(len(meta["frames"]), 0)
+                digest = (output / "digest.md").read_text(encoding="utf-8")
+                self.assertNotIn("youtu", digest)
+                self.assertIn("not a guaranteed seek position", digest)
+                self.assertIn("[00:01](" + canonical + ")", digest)
+                self.assertEqual(meta["channel"], "fixture")
+                frame = output / meta["frames"][0]["file"]
+                dimensions = json.loads(vd.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                    "-show_entries", "stream=width,height", "-of", "json", str(frame)]))["streams"][0]
+                self.assertLess(dimensions["width"], dimensions["height"])
+                if ext != "none":
+                    self.assertEqual((output / "transcript.txt").read_text(encoding="utf-8").count("hello there"), 2)
+                    self.assertIn("site-provided", digest)
+                else:
+                    self.assertIn("No usable English speech captions", digest)
+                stamp = (output / "digest.md").stat().st_mtime_ns
+                self.invoke(url, "--out", ext + " output")
+                self.assertEqual((output / "digest.md").stat().st_mtime_ns, stamp)
+                self.invoke(url, "--out", ext + " output", "--force")
 
 
 if __name__ == "__main__":

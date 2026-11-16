@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""video-digest: turn a YouTube video or playlist into Markdown that pairs
+"""video-digest: turn a YouTube video/playlist or TikTok video into Markdown that pairs
 screenshots with the time-aligned transcript, for an LLM to read.
 
 Needs yt-dlp and ffmpeg on PATH. Python stdlib only.
@@ -16,6 +16,7 @@ import sys
 import time
 import unicodedata
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 DEFAULT_ROOT = Path.home() / "video-digests"
 SETTLE = 0.5          # seconds after a scene cut to grab the frame (skip crossfades)
@@ -50,6 +51,46 @@ def fmt_ts(sec, force_hours=False):
     return f"{m:02d}:{s:02d}"
 
 
+def youtube_id(url):
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if host == "youtu.be":
+        return parsed.path.strip("/").split("/")[0] or None
+    if host == "youtube.com" or host.endswith(".youtube.com"):
+        if parsed.path == "/watch":
+            return parse_qs(parsed.query).get("v", [None])[0]
+        parts = parsed.path.strip("/").split("/")
+        if len(parts) == 2 and parts[0] in ("shorts", "embed", "live"):
+            return parts[1]
+    return None
+
+
+def source_url(info, fallback):
+    """Use the extractor's page URL, never turn a non-YouTube ID into YouTube."""
+    url = info.get("webpage_url") or info.get("original_url") or fallback
+    extractor = info.get("extractor_key") or info.get("extractor") or info.get("ie_key") or ""
+    if extractor.lower().startswith("youtube") or youtube_id(url):
+        return f"https://www.youtube.com/watch?v={info['id']}"
+    return url
+
+
+def timestamp_url(url, seconds):
+    vid = youtube_id(url)
+    return f"https://youtu.be/{vid}?t={int(seconds)}" if vid else url
+
+
+def playlist_entry_url(entry, playlist):
+    for key in ("webpage_url", "url"):
+        url = entry.get(key)
+        if url and urlparse(url).scheme in ("http", "https"):
+            return url
+    extractor = (entry.get("ie_key") or playlist.get("extractor_key")
+                 or playlist.get("extractor") or "")
+    if extractor.lower().startswith("youtube"):
+        return f"https://www.youtube.com/watch?v={entry['id']}"
+    raise ValueError("playlist entry has no video page URL")
+
+
 def run(cmd, cwd=None, retries=1, what=None):
     """Run a command, return stdout. Retries (for network calls) then raises."""
     # Resolve before changing cwd, including when PATH contains relative entries.
@@ -76,29 +117,41 @@ def ytdlp(args, **kw):
 
 def choose_subs(info):
     """Return (lang, ext, kind) for the best English track, or None.
-    Manual subs first, then the original-language ASR track, then any auto 'en'."""
+    Site/manual subs first, then original English ASR, then other English ASR.
+    Keep the extractor's language key: TikTok can use ISO-639-3 'eng-US'."""
+    def normalized(lang):
+        return lang.lower().replace("_", "-")
+
+    def english(lang):
+        return normalized(lang).split("-", 1)[0] in ("en", "eng")
+
     def pick_ext(tracks):
         exts = [t.get("ext") for t in tracks]
-        for e in ("json3", "vtt"):
+        for e in ("json3", "vtt", "srt", "json"):
             if e in exts:
                 return e
         return None
 
     manual = info.get("subtitles") or {}
-    keys = [k for k in manual if k == "en" or k.startswith("en-") or k.startswith("en_")]
-    keys.sort(key=lambda k: (k != "en", k))
+    keys = [k for k in manual if english(k)]
+    keys.sort(key=lambda k: (normalized(k) not in ("en", "eng"), normalized(k) != "en", k))
     for k in keys:
         ext = pick_ext(manual[k])
         if ext:
-            return k, ext, "manual"
+            extractor = info.get("extractor_key") or info.get("extractor") or ""
+            kind = "site-provided" if extractor.lower().startswith("tiktok") else "manual"
+            return k, ext, kind
     auto = info.get("automatic_captions") or {}
-    for k, kind in (("en-orig", "auto"), ("en", "auto")):
-        if k in auto:
-            ext = pick_ext(auto[k])
-            if ext:
-                if k == "en" and any(x.endswith("-orig") and x != "en-orig" for x in auto):
-                    kind = "auto (machine-translated)"
-                return k, ext, kind
+    order = {"en-orig": 0, "eng-orig": 1, "en": 2, "eng": 3}
+    keys = sorted((k for k in auto if english(k)), key=lambda k: (order.get(normalized(k), 4), k))
+    for k in keys:
+        ext = pick_ext(auto[k])
+        if ext:
+            kind = "auto"
+            if normalized(k) in ("en", "eng") and any(
+                    normalized(x).endswith("-orig") and not english(x) for x in auto):
+                kind = "auto (machine-translated)"
+            return k, ext, kind
     return None
 
 
@@ -127,11 +180,11 @@ def parse_json3(path):
     return segments, tokens
 
 
-VTT_TIME = re.compile(r"(\d+):(\d\d):(\d\d)[.,](\d{3})\s+-->")
+VTT_TIME = re.compile(r"(?:(\d+):)?(\d\d):(\d\d)[.,](\d{3})\s+-->")
 
 
-def parse_vtt(path):
-    """Parse WebVTT, removing the rolling duplicate lines of YouTube auto-subs."""
+def parse_vtt(path, rolling=True):
+    """Parse WebVTT, or SRT with rolling=False to preserve repeated cues."""
     segments, prev_lines = [], []
     blocks = re.split(r"\n\s*\n", Path(path).read_text(encoding="utf-8"))
     for b in blocks:
@@ -139,7 +192,7 @@ def parse_vtt(path):
         idx = next((i for i, l in enumerate(lines) if VTT_TIME.search(l)), None)
         if idx is None:
             continue
-        h, m, s, ms = map(int, VTT_TIME.search(lines[idx]).groups())
+        h, m, s, ms = (int(x or 0) for x in VTT_TIME.search(lines[idx]).groups())
         start = h * 3600 + m * 60 + s + ms / 1000
         text_lines = []
         for l in lines[idx + 1:]:
@@ -148,13 +201,38 @@ def parse_vtt(path):
             l = re.sub(r"\s+", " ", l).strip()
             if l:
                 text_lines.append(l)
-        new = [l for l in text_lines if l not in prev_lines]
+        new = [l for l in text_lines if l not in prev_lines] if rolling else text_lines
         prev_lines = text_lines
         text = " ".join(new).strip()
-        if text and not (segments and segments[-1][1] == text):
+        if text and not (rolling and segments and segments[-1][1] == text):
             segments.append((start, text))
     tokens = [(t, " " + x, True) for t, x in segments]
     return segments, tokens
+
+
+def parse_tiktok_json(path):
+    """TikTok caption utterances use start_time in milliseconds, unlike json3."""
+    data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    if not isinstance(data, dict) or not isinstance(data.get("utterances"), list):
+        return [], []
+    segments = []
+    for cue in data.get("utterances", []):
+        if not isinstance(cue, dict):
+            continue
+        text = re.sub(r"\s+", " ", cue.get("text") or "").strip()
+        start = cue.get("start_time")
+        if text and isinstance(start, (int, float)):
+            segments.append((start / 1000, text))
+    segments.sort()
+    return segments, [(t, " " + text, True) for t, text in segments]
+
+
+def parse_subtitles(path, ext, *, rolling_vtt=False):
+    if ext == "json3":
+        return parse_json3(path)
+    if ext == "json":
+        return parse_tiktok_json(path)
+    return parse_vtt(path, rolling=ext == "vtt" and rolling_vtt)
 
 
 def is_speech(text):
@@ -283,13 +361,12 @@ def assign_text(frames, tokens):
 
 
 def write_outputs(outdir, info, url, frames, segments, tokens, sub_kind, args):
-    vid = info["id"]
     duration = info.get("duration") or 0
     hours = duration >= 3600
     chapters = info.get("chapters") or []
     words = word_count(segments)
     # music-only videos get auto-captions like "[Music] hey hey [Music]"
-    has_speech = words > 0 and words / max(duration / 60, 1) >= MIN_WPM
+    has_speech = words > 0 and words / max(duration / 60, 1 / 60) >= MIN_WPM
     music_marks = sum(1 for _, t in segments if "[Music]" in t)
     lyrics_hint = has_speech and music_marks >= 0.2 * len(segments)
     texts = assign_text(frames, tokens) if frames else []
@@ -298,8 +375,8 @@ def write_outputs(outdir, info, url, frames, segments, tokens, sub_kind, args):
     if len(date) == 8:
         date = f"{date[:4]}-{date[4:6]}-{date[6:]}"
 
-    L = [f"# {info.get('title', vid)}", ""]
-    L.append(f"- URL: https://www.youtube.com/watch?v={vid}")
+    L = [f"# {info.get('title', info['id'])}", ""]
+    L.append(f"- URL: {url}")
     L.append(f"- Channel: {info.get('channel') or info.get('uploader') or 'unknown'}")
     L.append(f"- Uploaded: {date or 'unknown'}")
     L.append(f"- Duration: {fmt_ts(duration, hours)}")
@@ -311,13 +388,15 @@ def write_outputs(outdir, info, url, frames, segments, tokens, sub_kind, args):
         why = (f"captions hold only {words} stray words, likely ASR noise over music" if words else
                "subtitles contain no speech" if segments else
                sub_kind if sub_kind.startswith("none (") else "no English subtitles")
-        L.append(f"- Transcript: none. **This video has no speech** ({why}); "
+        L.append(f"- Transcript: none. **No usable English speech captions** ({why}); "
                  "frames are marked (no speech).")
+    if not youtube_id(url):
+        L.append("- Timecodes are offsets in the video; source links open the video, not a guaranteed seek position.")
     if chapters:
         L += ["", "## Chapters", ""]
         for c in chapters:
             s = int(c.get("start_time", 0))
-            L.append(f"- [{fmt_ts(s, hours)}](https://youtu.be/{vid}?t={s}) {c.get('title', '')}")
+            L.append(f"- [{fmt_ts(s, hours)}]({timestamp_url(url, s)}) {c.get('title', '')}")
     desc = (info.get("description") or "").strip()
     if desc:
         if len(desc) > 1500:
@@ -339,7 +418,7 @@ def write_outputs(outdir, info, url, frames, segments, tokens, sub_kind, args):
             L += [f"## Chapter: {ch}", ""]
             current = ch
         s = int(f["t"])
-        L += [f"### [{fmt_ts(s, hours)}](https://youtu.be/{vid}?t={s})", "",
+        L += [f"### [{fmt_ts(s, hours)}]({timestamp_url(url, s)})", "",
               f"![]({f['file']})", "",
               text if has_speech and text and is_speech(text) else "(no speech)", ""]
 
@@ -348,7 +427,7 @@ def write_outputs(outdir, info, url, frames, segments, tokens, sub_kind, args):
         encoding="utf-8")
 
     meta = {
-        "id": vid, "url": url, "title": info.get("title"),
+        "id": info["id"], "url": url, "title": info.get("title"),
         "channel": info.get("channel") or info.get("uploader"),
         "upload_date": date, "duration": duration,
         "description": info.get("description"), "chapters": chapters,
@@ -375,8 +454,7 @@ def digest_video(url, outdir, args, info=None):
     if info is None or "formats" not in info:
         log("fetching metadata", 1)
         info = json.loads(ytdlp(["-J", "--no-playlist", url], what="yt-dlp metadata"))
-    vid = info["id"]
-    url = f"https://www.youtube.com/watch?v={vid}"
+    url = source_url(info, url)
     log(f"{info.get('title')} ({fmt_ts(info.get('duration') or 0)})", 1)
 
     segments, tokens, sub_kind = [], [], "none"
@@ -384,7 +462,7 @@ def digest_video(url, outdir, args, info=None):
     if choice:
         lang, ext, sub_kind = choice
         log(f"subtitles: {lang} {ext} ({sub_kind})", 1)
-        flag = "--write-subs" if sub_kind == "manual" else "--write-auto-subs"
+        flag = "--write-subs" if sub_kind in ("manual", "site-provided") else "--write-auto-subs"
         for old in outdir.glob("subs.*"):
             old.unlink()
         try:
@@ -399,7 +477,9 @@ def digest_video(url, outdir, args, info=None):
             sub_kind = "none (machine-translated English track failed to download)"
         files = sorted(outdir.glob(f"subs.*.{ext}"))
         if files:
-            segments, tokens = (parse_json3 if ext == "json3" else parse_vtt)(files[0])
+            segments, tokens = parse_subtitles(files[0], ext, rolling_vtt=bool(youtube_id(url)))
+            if not segments:
+                sub_kind = "none (downloaded captions contain no supported timed text)"
             for f in files:
                 f.unlink()
     else:
@@ -407,7 +487,7 @@ def digest_video(url, outdir, args, info=None):
 
     video = next(iter(sorted(outdir.glob("video.*"))), None)
     if video is None or video.suffix in (".part", ".ytdl"):
-        log("downloading video (<=720p, video only)", 1)
+        log("downloading video (prefer <=720p; combined-format fallback)", 1)
         ytdlp(["-f", "bv*[height<=720][vcodec^=avc1]/bv*[height<=720]/b[height<=720]/b",
                "-o", "video.%(ext)s", url], cwd=outdir, what="yt-dlp video")
         video = next(p for p in sorted(outdir.glob("video.*")) if p.suffix not in (".part", ".ytdl"))
@@ -458,7 +538,7 @@ def main():
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(prog="video-digest", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("url", help="YouTube video or playlist URL")
+    ap.add_argument("url", help="YouTube video/playlist or TikTok video URL (including share links)")
     ap.add_argument("--out", type=Path, help=f"output directory (default {DEFAULT_ROOT}/<slug>)")
     ap.add_argument("--scene", type=float, default=0.3, help="ffmpeg scene-change threshold, 0-1 (default 0.3)")
     ap.add_argument("--max-gap", type=float, default=20, help="force a frame after this many seconds (default 20)")
@@ -506,7 +586,7 @@ def main():
                 log("skip: digest exists", 1)
                 meta = json.loads((outdir / "meta.json").read_text(encoding="utf-8"))
             else:
-                meta = digest_video(f"https://www.youtube.com/watch?v={e['id']}", outdir, args)
+                meta = digest_video(playlist_entry_url(e, info), outdir, args)
             row.update(title=meta["title"], duration=meta["duration"], frames=len(meta["frames"]),
                        speech=meta["transcript"]["has_speech"])
         except Exception as ex:  # keep going; record the failure in the index
