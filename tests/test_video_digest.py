@@ -54,7 +54,8 @@ class PortabilityTests(unittest.TestCase):
              patch.object(vd.subprocess, "run", side_effect=[failure, success]) as run, \
              patch.object(vd.time, "sleep") as sleep:
             self.assertEqual(vd.run(["tool", "argument"], cwd="different", retries=2), "ok")
-            self.assertEqual(run.call_args.args[0][0], str(Path("relative bin/tool.exe").resolve()))
+            # Executables keep aliases/symlinks, including Windows 8.3 paths.
+            self.assertEqual(run.call_args.args[0][0], str(Path.cwd() / "relative bin" / "tool.exe"))
             self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
             sleep.assert_called_once_with(10)
         with patch.object(vd.subprocess, "run", return_value=failure):
@@ -82,7 +83,8 @@ with patch.object(vd.shutil, "which", return_value=sys.executable), \\
             with patch.dict(os.environ, {"PYTHONIOENCODING": "ascii"}):
                 result = vd.run([sys.executable, str(script), "https://example.test/fixture",
                                  "--out", str(root)])
-            self.assertIn(str(root), result)
+            # --out is canonicalized, which expands Windows 8.3 temp paths.
+            self.assertIn(str(root.resolve()), result)
             self.assertIn("skip:", result)
 
     def test_subtitle_selection_and_parsing(self):
