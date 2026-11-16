@@ -211,8 +211,8 @@ Defaults yield roughly 100–300 frames for many talks. Lower `--dedup` or use
 
 English manual captions take precedence over original English auto captions,
 then other auto English tracks. json3 word timing is preferred; VTT, SRT, and
-TikTok JSON are fallbacks. Rolling VTT duplicates are removed; repeated SRT
-cues are preserved. No transcription service is used. Fewer than
+TikTok JSON are fallbacks. YouTube rolling VTT duplicates are removed; repeated
+TikTok VTT and SRT cues are preserved. No transcription service is used. Fewer than
 20 caption words/minute is classified as no speech; frequent `[Music]` markers
 flag possible lyrics. The header says when no usable English speech captions
 were found; this is a heuristic, not a determination that the video is silent.

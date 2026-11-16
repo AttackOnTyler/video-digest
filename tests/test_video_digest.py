@@ -67,8 +67,12 @@ class PortabilityTests(unittest.TestCase):
             captions.write_text(json.dumps({"description": "untimed post text"}), encoding="utf-8")
             self.assertEqual(vd.parse_subtitles(captions, "json"), ([], []))
             captions = root / "captions.vtt"
-            captions.write_text("WEBVTT\n\n00:01.000 --> 00:03.000\nshort cue\n", encoding="utf-8")
-            self.assertEqual(vd.parse_subtitles(captions, "vtt")[0], [(1, "short cue")])
+            captions.write_text("WEBVTT\n\n00:01.000 --> 00:03.000\nhello there\n\n"
+                                "00:04.000 --> 00:07.000\nhello there\n", encoding="utf-8")
+            self.assertEqual(vd.parse_subtitles(captions, "vtt")[0],
+                             [(1, "hello there"), (4, "hello there")])
+            self.assertEqual(vd.parse_subtitles(captions, "vtt", rolling_vtt=True)[0],
+                             [(1, "hello there")])
 
     def test_subprocess_preserves_interpreter_environment(self):
         prefix = vd.run([sys.executable, "-c", "import sys; print(sys.prefix)"]).strip()
@@ -245,7 +249,7 @@ elif "--skip-download" in a:
         data = json.dumps({"utterances": [{"start_time": 1000, "text": "hello there"},
                                          {"start_time": 4000, "text": "hello there"}]})
     elif ext == "vtt":
-        data = "WEBVTT\\n\\n00:01.000 --> 00:03.000\\nhello there\\n\\n00:04.000 --> 00:07.000\\nlater words\\n"
+        data = "WEBVTT\\n\\n00:01.000 --> 00:03.000\\nhello there\\n\\n00:04.000 --> 00:07.000\\nhello there\\n"
     pathlib.Path("subs.en-US." + ext).write_text(data, encoding="utf-8")
 else:
     assert a[-1] == canonical
@@ -340,7 +344,7 @@ else:
                     "-show_entries", "stream=width,height", "-of", "json", str(frame)]))["streams"][0]
                 self.assertLess(dimensions["width"], dimensions["height"])
                 if ext != "none":
-                    self.assertIn("hello there", (output / "transcript.txt").read_text(encoding="utf-8"))
+                    self.assertEqual((output / "transcript.txt").read_text(encoding="utf-8").count("hello there"), 2)
                     self.assertIn("site-provided", digest)
                 else:
                     self.assertIn("No usable English speech captions", digest)

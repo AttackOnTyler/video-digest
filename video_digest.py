@@ -217,12 +217,12 @@ def parse_tiktok_json(path):
     return segments, [(t, " " + text, True) for t, text in segments]
 
 
-def parse_subtitles(path, ext):
+def parse_subtitles(path, ext, *, rolling_vtt=False):
     if ext == "json3":
         return parse_json3(path)
     if ext == "json":
         return parse_tiktok_json(path)
-    return parse_vtt(path, rolling=ext == "vtt")
+    return parse_vtt(path, rolling=ext == "vtt" and rolling_vtt)
 
 
 def is_speech(text):
@@ -467,7 +467,7 @@ def digest_video(url, outdir, args, info=None):
             sub_kind = "none (machine-translated English track failed to download)"
         files = sorted(outdir.glob(f"subs.*.{ext}"))
         if files:
-            segments, tokens = parse_subtitles(files[0], ext)
+            segments, tokens = parse_subtitles(files[0], ext, rolling_vtt=bool(youtube_id(url)))
             if not segments:
                 sub_kind = "none (downloaded captions contain no supported timed text)"
             for f in files:
