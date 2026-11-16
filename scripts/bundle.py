@@ -23,7 +23,7 @@ def bundle(destination):
     files += list((ROOT / "tests").rglob("*.py"))
     files += list((ROOT / ".github" / "workflows").glob("*.yml"))
     with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for path in sorted(files):
+        for path in sorted(files, key=lambda p: p.relative_to(ROOT).as_posix()):
             relative = path.relative_to(ROOT).as_posix()
             entry = zipfile.ZipInfo(f"video-digest/{relative}", (2020, 1, 1, 0, 0, 0))
             entry.create_system = 3

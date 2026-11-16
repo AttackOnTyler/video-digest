@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+import zipfile
 
 import video_digest as vd
 
@@ -24,6 +25,10 @@ def working_directory(directory):
 
 
 class PortabilityTests(unittest.TestCase):
+    def test_subprocess_preserves_interpreter_environment(self):
+        prefix = vd.run([sys.executable, "-c", "import sys; print(sys.prefix)"]).strip()
+        self.assertEqual(Path(prefix), Path(sys.prefix))
+
     def test_windows_safe_slugs(self):
         for title in ("CON", "prn", "AUX.", "nul", "COM1", "lpt9"):
             self.assertTrue(vd.slugify(title).startswith("video-"))
@@ -104,6 +109,24 @@ with patch.object(vd.shutil, "which", return_value=sys.executable), \\
         self.assertFalse(any(reason == "scene" for _, reason in picks))
         self.assertTrue(all(b[0] - a[0] <= 6 for a, b in zip(picks, picks[1:])))
         self.assertEqual(vd.thumb_diff(b"\x00\x00", b"\x00\x20"), 0.5)
+
+
+class BundleTests(unittest.TestCase):
+    def test_reproducible_archive_order_and_contents(self):
+        script = Path(__file__).resolve().parents[1] / "scripts" / "bundle.py"
+        with tempfile.TemporaryDirectory(prefix="digest bundle ") as directory:
+            first = vd.run([sys.executable, str(script), "--out", directory])
+            archive = Path(first.splitlines()[0])
+            before = archive.read_bytes()
+            vd.run([sys.executable, str(script), "--out", directory])
+            self.assertEqual(archive.read_bytes(), before)
+            with zipfile.ZipFile(archive) as source:
+                names = source.namelist()
+                self.assertEqual(names, sorted(names))
+                self.assertIn("video-digest/video_digest.py", names)
+                self.assertIn("video-digest/skills/video-digest/SKILL.md", names)
+                self.assertIn("video-digest/skills/video-digest/references/notes-template.md", names)
+                self.assertFalse(any("/.git/" in n or "/.venv/" in n for n in names))
 
 
 class MediaTests(unittest.TestCase):

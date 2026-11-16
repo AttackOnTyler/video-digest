@@ -55,7 +55,7 @@ def run(cmd, cwd=None, retries=1, what=None):
     # Resolve before changing cwd, including when PATH contains relative entries.
     executable = shutil.which(cmd[0])
     if executable:
-        cmd = [str(Path(executable).resolve()), *cmd[1:]]
+        cmd = [str(Path(executable).absolute()), *cmd[1:]]
     for attempt in range(1, retries + 1):
         p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
                            encoding="utf-8", errors="replace")
