@@ -1,0 +1,4 @@
+include video-digest flake.nix flake.lock
+recursive-include skills *.md
+recursive-include scripts *.py
+recursive-include tests *.py
